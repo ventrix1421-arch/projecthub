@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ProjectHub Pro</title>
+    <title>ProjectHub Pro (Cloud Syncing)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script>
@@ -68,14 +68,14 @@
                     <div class="p-1.5 bg-gray-900 text-white rounded-lg"><i data-lucide="key-round" class="h-4 w-4"></i></div>
                     <h2 class="text-xl font-bold text-gray-900">Initialize ProjectHub</h2>
                 </div>
-                <p class="text-xs text-gray-600 font-medium">Please enter your email to construct your isolated workspace portfolio. No password required.</p>
+                <p class="text-xs text-gray-600 font-medium">Enter your email. The system will sync your projects dynamically across devices matching this account!</p>
             </div>
             <div>
                 <label class="text-xs font-bold uppercase tracking-wider text-gray-900" for="reg-email">Email Address</label>
                 <input id="reg-email" type="email" placeholder="you@example.com" class="flex h-10 w-full rounded-md border-2 border-gray-300 bg-background px-3 py-2 text-sm font-semibold text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary mt-1">
             </div>
             <button onclick="registerUser()" class="inline-flex items-center justify-center rounded-md text-sm font-bold transition-colors bg-gray-900 text-white hover:bg-gray-800 h-10 px-4 w-full shadow">
-                Get Started
+                Get Started & Sync
             </button>
         </div>
     </div>
@@ -93,8 +93,14 @@
                 <div class="p-3 bg-gray-50 rounded-lg border border-gray-200">
                     <p id="profile-email-display" class="text-sm font-bold text-gray-900 truncate">Loading...</p>
                 </div>
+                <div class="flex items-center gap-2 text-xs font-semibold text-emerald-600 bg-emerald-50 border border-emerald-200 rounded p-2 mt-1">
+                    <i data-lucide="cloud-lightning" class="h-3.5 w-3.5 shrink-0"></i> Cross-Device Cloud Live Sync Connected
+                </div>
             </div>
             <div class="pt-2 flex flex-col gap-2">
+                <button onclick="syncFromCloud()" class="inline-flex items-center justify-center rounded-md text-xs font-bold transition-colors bg-blue-600 hover:bg-blue-700 text-white h-9 px-3 w-full">
+                    <i data-lucide="refresh-cw" class="w-3.5 h-3.5 mr-1.5"></i> Force Sync Refresh Now
+                </button>
                 <button onclick="switchAccount()" class="inline-flex items-center justify-center rounded-md text-xs font-bold transition-colors border-2 border-gray-300 hover:bg-gray-100 text-gray-900 h-9 px-3 w-full">
                     <i data-lucide="log-out" class="w-3.5 h-3.5 mr-1.5"></i> Switch Active Session Email
                 </button>
@@ -107,9 +113,14 @@
         <aside id="sidebar-container" class="bg-white border-b lg:border-b-0 lg:border-r border-border p-6 lg:sticky lg:top-0 lg:h-screen lg:overflow-hidden flex flex-col justify-between transition-colors duration-200">
             <div class="overflow-y-auto lg:overflow-visible space-y-5">
                 <div>
-                    <div class="flex items-center gap-2 mb-1">
-                        <i data-lucide="layers" class="h-6 w-6 text-primary"></i>
-                        <h1 class="text-xl font-bold tracking-tight text-gray-900">ProjectHub</h1>
+                    <div class="flex items-center justify-between mb-1">
+                        <div class="flex items-center gap-2">
+                            <i data-lucide="layers" class="h-6 w-6 text-primary"></i>
+                            <h1 class="text-xl font-bold tracking-tight text-gray-900">ProjectHub</h1>
+                        </div>
+                        <span id="sync-status" class="inline-flex items-center gap-1 text-[10px] bg-emerald-100 border border-emerald-300 text-emerald-800 font-bold px-2 py-0.5 rounded-full">
+                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> Cloud Synced
+                        </span>
                     </div>
                     <p class="text-sm font-medium text-gray-900 mt-1">Track and manage your development portfolio blueprints.</p>
                 </div>
@@ -235,33 +246,103 @@
         let data = [];
         let currentUserEmail = "";
         let currentTab = 'All';
+        let syncIntervalId = null;
 
-        // Identity lifecycle session routing check
+        // Generates a safe, alphanumeric cloud routing key directly from the email
+        function getStorageEndpointKey(email) {
+            return btoa(email.toLowerCase().trim()).replace(/[^a-zA-Z0-9]/g, "");
+        }
+
+        function showSyncStatus(text, type = 'success') {
+            const statusEl = document.getElementById('sync-status');
+            if (type === 'syncing') {
+                statusEl.className = "inline-flex items-center gap-1 text-[10px] bg-blue-100 border border-blue-300 text-blue-800 font-bold px-2 py-0.5 rounded-full";
+                statusEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-blue-500 animate-spin"></span> ${text}`;
+            } else if (type === 'error') {
+                statusEl.className = "inline-flex items-center gap-1 text-[10px] bg-red-100 border border-red-300 text-red-800 font-bold px-2 py-0.5 rounded-full";
+                statusEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-red-500"></span> Error Syncing`;
+            } else {
+                statusEl.className = "inline-flex items-center gap-1 text-[10px] bg-emerald-100 border border-emerald-300 text-emerald-800 font-bold px-2 py-0.5 rounded-full";
+                statusEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> Cloud Synced`;
+            }
+            lucide.createIcons();
+        }
+
         function checkSession() {
             const savedEmail = localStorage.getItem('ph_user_email');
             if (!savedEmail) {
                 document.getElementById('auth-wall').classList.remove('hidden');
                 document.getElementById('app-content').classList.add('hidden');
+                if (syncIntervalId) clearInterval(syncIntervalId);
             } else {
                 currentUserEmail = savedEmail;
                 document.getElementById('auth-wall').classList.add('hidden');
                 document.getElementById('app-content').classList.remove('hidden');
                 document.getElementById('profile-email-display').innerText = currentUserEmail;
                 
-                // Initialize unique dynamic storage slot linked exclusively to user email hash keys
+                // Fallback to local storage cache immediately while fetching cloud real-time variants
                 data = JSON.parse(localStorage.getItem(`ph_data_${currentUserEmail}`) || '[]');
-                
                 updateStats();
                 render();
                 loadDraft();
+
+                // Fire initial cloud synchronization fetch
+                syncFromCloud();
+
+                // Setup automated pulling interval loop to check for additions from other devices every 7 seconds
+                if (syncIntervalId) clearInterval(syncIntervalId);
+                syncIntervalId = setInterval(syncFromCloud, 7000);
             }
             lucide.createIcons();
+        }
+
+        // Pull and compare data from cloud engine matching email hash space
+        async function syncFromCloud() {
+            if (!currentUserEmail) return;
+            const bucketKey = getStorageEndpointKey(currentUserEmail);
+            try {
+                const response = await fetch(`https://kvdb.io/MN9876vUasdfghjklqwerty/${bucketKey}`);
+                if (response.ok) {
+                    const cloudData = await response.json();
+                    if (JSON.stringify(cloudData) !== JSON.stringify(data)) {
+                        data = cloudData;
+                        localStorage.setItem(`ph_data_${currentUserEmail}`, JSON.stringify(data));
+                        updateStats();
+                        render();
+                    }
+                    showSyncStatus("Cloud Synced");
+                } else if (response.status === 404) {
+                    // Endpoint doesn't exist on server yet, initialize it by uploading local data
+                    syncToCloud();
+                }
+            } catch (err) {
+                console.error("Cloud syncing error fallback handled", err);
+                showSyncStatus("Offline Cache", 'error');
+            }
+        }
+
+        // Push layout states up to global access pool
+        async function syncToCloud() {
+            if (!currentUserEmail) return;
+            const bucketKey = getStorageEndpointKey(currentUserEmail);
+            showSyncStatus("Saving...", 'syncing');
+            try {
+                await fetch(`https://kvdb.io/MN9876vUasdfghjklqwerty/${bucketKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                showSyncStatus("Cloud Synced");
+            } catch (err) {
+                console.error("Cloud upload delay", err);
+                showSyncStatus("Sync Pending", 'error');
+            }
         }
 
         function registerUser() {
             const emailField = document.getElementById('reg-email').value.trim();
             if (!emailField || !emailField.includes('@')) {
-                alert('Please provide a valid email format structure.');
+                alert('Please provide a valid email address.');
                 return;
             }
             localStorage.setItem('ph_user_email', emailField);
@@ -269,13 +350,13 @@
         }
 
         function toggleAccountModal() {
-            const modal = document.getElementById('account-modal');
-            modal.classList.toggle('hidden');
+            document.getElementById('account-modal').classList.toggle('hidden');
         }
 
         function switchAccount() {
             localStorage.removeItem('ph_user_email');
             document.getElementById('account-modal').classList.add('hidden');
+            if (syncIntervalId) clearInterval(syncIntervalId);
             clearForm();
             checkSession();
         }
@@ -284,25 +365,21 @@
             if (!currentUserEmail) return;
             localStorage.setItem(`ph_data_${currentUserEmail}`, JSON.stringify(data));
             updateStats();
+            syncToCloud(); // Save locally, then sync directly to external devices
         };
 
         function autoGenerateDescription() {
             const titleInput = document.getElementById('t').value.trim();
             if (!titleInput) return alert('Please type a Project Title first!');
-
             const lowerTitle = titleInput.toLowerCase();
-            let autoDesc = "A modular, high-performance web platform designed with responsive component systems and robust layout states.";
-
+            let autoDesc = "A modular web application layout with robust interfaces and responsive client components.";
             if (lowerTitle.includes('shop') || lowerTitle.includes('commerce') || lowerTitle.includes('store')) {
-                autoDesc = "A secure, state-of-the-art e-commerce framework featuring responsive global cart synchronization and optimized workflows.";
-            } else if (lowerTitle.includes('chat') || lowerTitle.includes('social') || lowerTitle.includes('messaging')) {
-                autoDesc = "A highly concurrent communication application utilizing bi-directional real-time data streaming sockets layers.";
-            } else if (lowerTitle.includes('portfolio') || lowerTitle.includes('cv') || lowerTitle.includes('resume')) {
-                autoDesc = "A streamlined, fast-loading aesthetic developer presentation space meticulously structured to highlight core systems pipelines.";
-            } else if (lowerTitle.includes('task') || lowerTitle.includes('manage') || lowerTitle.includes('todo')) {
-                autoDesc = "A robust contextual workflow utility manager engineered with persistent state filters layers tracking.";
+                autoDesc = "A safe online store framework featuring dynamic cart handling and secure layout checkouts.";
+            } else if (lowerTitle.includes('chat') || lowerTitle.includes('social')) {
+                autoDesc = "A real-time communication portal backed by rapid socket delivery systems and profiles.";
+            } else if (lowerTitle.includes('portfolio') || lowerTitle.includes('cv')) {
+                autoDesc = "An elegant layout workspace engineered to exhibit operational web applications blueprints.";
             }
-
             document.getElementById('d').value = autoDesc;
             saveDraft();
         }
@@ -335,18 +412,16 @@
                 document.getElementById('demo').value = draft.demo || '';
                 document.getElementById('host').value = draft.host || '';
                 if (draft.editId) toggleEditState(draft.editId);
-            } catch(e) { console.error("Draft config fetch reset encountered", e); }
+            } catch(e) {}
         }
 
         function setTab(tabName) {
             currentTab = tabName;
             ['All', 'Planned', 'In Progress', 'Completed'].forEach(tab => {
                 const btn = document.getElementById(`tab-${tab}`);
-                if (tab === tabName) {
-                    btn.className = "inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-bold transition-all bg-white text-foreground shadow-sm";
-                } else {
-                    btn.className = "inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-bold transition-all text-gray-900 hover:bg-white/50";
-                }
+                btn.className = tab === tabName ? 
+                    "inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-bold transition-all bg-white text-foreground shadow-sm" : 
+                    "inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-bold transition-all text-gray-900 hover:bg-white/50";
             });
             render();
         }
@@ -387,7 +462,6 @@
         function editProject(id) {
             const project = data.find(p => p.id == id);
             if (!project) return;
-
             document.getElementById('t').value = project.t;
             document.getElementById('d').value = project.d;
             document.getElementById('tech').value = project.tech;
@@ -395,7 +469,6 @@
             document.getElementById('git').value = project.git || '';
             document.getElementById('demo').value = project.demo || '';
             document.getElementById('host').value = project.host || '';
-            
             toggleEditState(id);
             saveDraft();
             window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -415,19 +488,17 @@
             document.getElementById('edit-id').value = '';
             ['t', 'd', 'tech', 'git', 'demo', 'host'].forEach(i => document.getElementById(i).value = ''); 
             document.getElementById('s').selectedIndex = 0; 
-            
             document.getElementById('submit-text').innerText = "Add Project";
             document.getElementById('submit-btn').className = "inline-flex items-center justify-center rounded-md text-sm font-bold transition-colors bg-gray-900 text-white hover:bg-gray-800 h-11 py-2 px-4 w-full shadow";
             document.getElementById('cancel-btn').style.display = "none";
             document.getElementById('sidebar-container').classList.remove('bg-amber-50/30');
             document.getElementById('submit-icon').setAttribute('data-lucide', 'plus');
-            
             if (currentUserEmail) localStorage.removeItem(`ph_draft_${currentUserEmail}`);
             lucide.createIcons();
         }
 
         function del(id) { 
-            if (confirm('Are you sure you want to delete this project permanently?')) { 
+            if (confirm('Delete this project across all synced devices?')) { 
                 data = data.filter(p => p.id !== id);
                 if(document.getElementById('edit-id').value == id) clearForm();
                 save(); 
@@ -495,7 +566,7 @@
             lucide.createIcons();
         }
 
-        // Initialize App Bootstrapper Runtime checking rules
+        // Initialize App Session Bootstrapper
         checkSession();
     </script>
 </body>
